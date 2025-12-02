@@ -1,0 +1,161 @@
+import streamlit as st
+# Must be the first Streamlit command
+st.set_page_config(
+    page_title="A's Process Mining Viewer",
+    page_icon=".streamlit/icon.png",
+    layout="wide",
+)
+
+
+# Hide Streamlit UI elements
+hide_streamlit_style = """
+    <style>
+        /* Hide MainMenu (the 3 dots) */
+        #MainMenu {visibility: hidden;}
+
+        /* Hide Streamlit footer */
+        footer {visibility: hidden;}
+
+        /* Hide deploy button */
+        .stDeployButton {display: none;}
+
+        /* Hide header entirely */
+        header {visibility: hidden;}
+
+        /* Hide top-right hamburger menu */
+        .css-1adrfps {visibility: hidden;}
+
+        /* Hide floating toolbar inside the app */
+        .st-emotion-cache-16idsys {display: none;}
+    </style>
+"""
+st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+
+st.title(" A's Protocol - Process Mining Viewer")
+import pandas as pd
+import networkx as nx
+from pyvis.network import Network
+import altair as alt
+import tempfile
+
+
+uploaded = st.file_uploader("Upload CSV (case_id, activity, timestamp)", type=["csv"])
+
+if uploaded:
+    df = pd.read_csv(uploaded)
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+
+    # Sort data
+    df = df.sort_values(["case_id", "timestamp"])
+
+    # Build edges (event → next event)
+    edges = []
+    for case_id, group in df.groupby("case_id"):
+        group = group.reset_index(drop=True)
+        for i in range(len(group) - 1):
+            a1 = group.loc[i]
+            a2 = group.loc[i+1]
+            duration = (a2["timestamp"] - a1["timestamp"]).total_seconds() / 60
+            edges.append([a1["activity"], a2["activity"], duration])
+
+    edges_df = pd.DataFrame(edges, columns=["from", "to", "duration"])
+
+    # -----------------------------------------------------
+    # TRANSITION SUMMARY
+    # -----------------------------------------------------
+    summary = edges_df.groupby(["from", "to"]).agg(
+        count=("duration", "count"),
+        avg_minutes=("duration", "mean")
+    ).reset_index()
+
+    st.subheader("Transition Statistics")
+    st.dataframe(summary)
+
+    # -----------------------------------------------------
+    # PROCESS VARIANTS + DEVIATIONS
+    # -----------------------------------------------------
+    st.subheader("Process Variants & Deviations")
+
+    # Build path list for each case
+    paths = df.groupby("case_id")["activity"].apply(list).reset_index()
+    paths.columns = ["case_id", "path"]
+
+    # Expected process model (customize for your business)
+    expected_path = ["Start", "Review", "Approve", "End"]
+
+    # Deviation rules
+    def missing_steps_func(path_list):
+        return any(step not in path_list for step in expected_path)
+
+    def unexpected_activities_func(path_list):
+        return any(step not in expected_path for step in path_list)
+
+    def wrong_order_func(path_list):
+        filtered = [step for step in path_list if step in expected_path]
+        indices = [expected_path.index(step) for step in filtered]
+        return indices != sorted(indices)
+
+    def is_deviation_func(path_list):
+        return (
+            missing_steps_func(path_list)
+            or unexpected_activities_func(path_list)
+            or wrong_order_func(path_list)
+            or path_list != expected_path
+        )
+
+    # Apply deviation functions
+    paths["missing_steps"] = paths["path"].apply(missing_steps_func)
+    paths["unexpected_activities"] = paths["path"].apply(unexpected_activities_func)
+    paths["wrong_order"] = paths["path"].apply(wrong_order_func)
+    paths["is_deviation"] = paths["path"].apply(is_deviation_func)
+
+    st.dataframe(paths)
+
+    # -----------------------------------------------------
+    # BOTTLENECK DETECTION
+    # -----------------------------------------------------
+    st.subheader("Top Bottlenecks (Slowest Steps)")
+
+    bottlenecks = summary.sort_values("avg_minutes", ascending=False).head(3)
+    st.dataframe(bottlenecks)
+
+    avg_overall = summary["avg_minutes"].mean()
+
+    # -----------------------------------------------------
+    # FLOWCHART (PyVis)
+    # -----------------------------------------------------
+    st.subheader("Process Flowchart")
+
+    G = nx.DiGraph()
+
+    for _, row in summary.iterrows():
+        color = "red" if row["avg_minutes"] > avg_overall else "gray"
+        G.add_edge(
+            row["from"], row["to"],
+            label=f"{row['count']} cases\n{row['avg_minutes']:.1f} min",
+            color=color
+        )
+
+    net = Network(height="500px", directed=True)
+    net.from_nx(G)
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as f:
+        net.save_graph(f.name)
+        html_path = f.name
+
+    st.components.v1.html(open(html_path, "r").read(), height=550)
+
+    # -----------------------------------------------------
+    # BAR CHART (Altair)
+    # -----------------------------------------------------
+    st.subheader("Average Duration per Transition")
+
+    chart = alt.Chart(summary).mark_bar().encode(
+        x=alt.X("from:N", title="From Activity"),
+        xOffset="to:N",
+        y=alt.Y("avg_minutes:Q", title="Avg Duration (Minutes)"),
+        color="to:N",
+        tooltip=["from", "to", "avg_minutes", "count"]
+    ).properties(height=400)
+
+    st.altair_chart(chart, use_container_width=True)
