@@ -1,0 +1,10 @@
+# backups
+*backup*
+*bkup*
+
+# zip files
+*.zip
+
+# local / test data
+claims_fake_50_with_issues.csv
+sample_claims.csv
