@@ -94,7 +94,26 @@ industry_prompts = {
 }
 st.info(industry_prompts[industry])
 
-uploaded = st.file_uploader("Upload Process Log (CSV)", type=["csv"])
+#uploaded = st.file_uploader("Upload Process Log (CSV)", type=["csv"])
+st.markdown("#### 📤 Upload Process Log (CSV)")
+
+uploaded = st.file_uploader(
+    "Upload your process log file",
+    type=["csv"],
+    label_visibility="collapsed"
+)
+
+# --- Template Download Button ---
+st.markdown("📎 Don't have a file? Download a sample template:")
+
+with open("sample_claims.csv", "rb") as f:
+    st.download_button(
+        label="⬇️ Download Template CSV",
+        data=f,
+        file_name="sample_claims.csv",
+        mime="text/csv",
+        use_container_width=False
+    )
 
 if uploaded:
     df = pd.read_csv(uploaded)
